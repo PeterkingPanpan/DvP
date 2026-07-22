@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "wasd-cursor",
+    name: "DvP",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "wasd-cursor",
+            name: "DvP",
             path: "Sources"
         )
     ]
