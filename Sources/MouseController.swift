@@ -47,6 +47,25 @@ enum MouseController {
         up.post(tap: .cghidEventTap)
     }
 
+    // MARK: - 瞬移
+
+    static func warpToCenter() {
+        guard let screen = NSScreen.main else { return }
+        let center = CGPoint(
+            x: screen.frame.midX,
+            y: screen.frame.midY
+        )
+
+        guard let event = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: center,
+            mouseButton: .left
+        ) else { return }
+
+        event.post(tap: .cghidEventTap)
+    }
+
     // MARK: - 按键
 
     static func keyPress(keyCode: Int64) {
@@ -78,7 +97,7 @@ enum MouseController {
     // MARK: - 坐标
 
     /// 当前鼠标位置，Quartz 坐标系（左上角为原点）
-    private static var currentMousePosition: CGPoint {
+    static var currentMousePosition: CGPoint {
         let nsPoint = NSEvent.mouseLocation            // 左下角原点
         let screenHeight = NSScreen.main?.frame.height ?? 900
         return CGPoint(

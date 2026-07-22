@@ -5,11 +5,12 @@ struct CursorEngine {
 
     // MARK: - 可调参数
 
-    var baseSpeed: Double = 200       // 像素/秒（原来 400）
-    var shiftMultiplier: Double = 2.5 // 按住加速键时速度倍率（原来 3.0）
-    var maxSpeed: Double = 1600       // 速度上限 像素/秒（原来 3000）
-    var smoothing: Double = 0.30      // lerp 因子（0=无惯性, 1=不移动）
-    var accelerationRamp: Double = 1.8 // 按住越久越快（原来 2.5）
+    var baseSpeed: Double = 100       // 像素/秒（轻触起点很低）
+    var shiftMultiplier: Double = 2.0 // 按住 ; 时速度倍率
+    var maxSpeed: Double = 3500       // 速度上限 像素/秒（长按起飞）
+    var smoothing: Double = 0.25      // lerp 因子（0=无惯性, 1=不移动）
+    var accelerationRamp: Double = 3.0 // 加速曲线 t 系数（越高越快起飞）
+    var accelerationCap: Double = 30.0 // 加速倍率上限
 
     // MARK: - 内部状态
 
@@ -41,7 +42,8 @@ struct CursorEngine {
         let speed = speedKeyHeld ? baseSpeed * shiftMultiplier : baseSpeed
 
         for key in heldKeys {
-            let ramp = min(1.0 + holdDurations[key, default: 0] * accelerationRamp, 3.0)
+            let t = holdDurations[key, default: 0] * accelerationRamp
+            let ramp = min(1.0 + t * t * t, accelerationCap)
             switch key {
             case 34: targetVY -= speed * ramp // I = 上
             case 38: targetVX -= speed * ramp // J = 左
@@ -72,6 +74,12 @@ struct CursorEngine {
         velocityX = 0
         velocityY = 0
         holdDurations.removeAll()
+    }
+
+    /// 撞到屏幕边缘时调用——立即杀掉该方向的残留速度
+    mutating func killVelocity(x: Bool, y: Bool) {
+        if x { velocityX = 0 }
+        if y { velocityY = 0 }
     }
 
     // MARK: - Helpers

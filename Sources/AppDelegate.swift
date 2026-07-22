@@ -47,39 +47,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - 图标颜色
+
+    /// 深蓝色 — 替代系统灰
+    private static let accentBlue = NSColor(
+        red: 0.08, green: 0.38, blue: 0.75, alpha: 1.0
+    )
+
+    /// 给 SF Symbol 染色（非 template 才能在菜单栏显色）
+    private static func tintedIcon(_ name: String, color: NSColor = accentBlue) -> NSImage? {
+        guard let raw = NSImage(systemSymbolName: name,
+                                accessibilityDescription: nil) else { return nil }
+        let config = NSImage.SymbolConfiguration(hierarchicalColor: color)
+        let tinted = raw.withSymbolConfiguration(config)
+        tinted?.isTemplate = false
+        return tinted
+    }
+
     // MARK: - 菜单栏
 
     private func updateMenuBarIcon() {
         guard let button = statusItem.button else { return }
 
         if !PermissionManager.isTrusted {
-            button.image = NSImage(
-                systemSymbolName: "circle",
-                accessibilityDescription: "无权限"
-            )
+            button.image = Self.tintedIcon("circle", color: .systemGray)
             button.toolTip = "wasd-cursor — 缺少辅助功能权限"
         } else {
             switch AppState.shared.mode {
             case .normal:
-                button.image = NSImage(
-                    systemSymbolName: "circle.fill",
-                    accessibilityDescription: "待机"
-                )
+                button.image = Self.tintedIcon("circle.fill")
                 button.toolTip = "wasd-cursor — 待机 (Esc+I 激活)"
 
             case .cursor:
-                button.image = NSImage(
-                    systemSymbolName: "record.circle.fill",
-                    accessibilityDescription: "光标模式"
-                )
+                button.image = Self.tintedIcon("record.circle.fill")
                 button.toolTip = "wasd-cursor — 光标模式 (Esc+I 退出)"
 
             case .input:
-                button.image = NSImage(
-                    systemSymbolName: "circle.dotted",
-                    accessibilityDescription: "输入模式"
-                )
-                button.toolTip = "wasd-cursor — 输入模式 (Esc+I 退出)"
+                button.image = Self.tintedIcon("circle.dotted")
+                button.toolTip = "wasd-cursor — 输入模式 (Esc+U 返回)"
             }
         }
     }
