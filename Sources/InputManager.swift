@@ -7,27 +7,32 @@ final class InputManager {
     // MARK: - Key codes
 
     private enum KC {
+        // 方向键
+        static let i: Int64 = 34
+        static let j: Int64 = 38
+        static let k: Int64 = 40
+        static let l: Int64 = 37
+        // 功能键
         static let esc: Int64 = 53
-        static let i: Int64   = 34
-        static let j: Int64   = 38
-        static let k: Int64   = 40
-        static let l: Int64   = 37
         static let semicolon: Int64 = 41
         static let space: Int64 = 49
-        static let n: Int64   = 45
-        static let m: Int64   = 46
-        static let o: Int64   = 31
-        static let u: Int64   = 32
-        static let h: Int64   = 4
-        // 滚动 / 翻页
-        static let w: Int64   = 13
-        static let a: Int64   = 0
-        static let s: Int64   = 1
-        static let d: Int64   = 2
-        static let ctrl: Int64 = 59
+        static let u: Int64 = 32
+        // 点击
+        static let slash: Int64 = 44  // / — 左键单击/双击
+        static let n: Int64 = 45
+        static let m: Int64 = 46
+        // 回车发射
+        static let o: Int64 = 31
+        // 瞬移
+        static let h: Int64 = 4
+        // WASD
+        static let w: Int64 = 13
+        static let a: Int64 = 0
+        static let s: Int64 = 1
+        static let d: Int64 = 2
     }
 
-    /// 每秒滚动像素
+    /// 滚轮速度（像素/秒）
     private static let scrollSpeed: Double = 480
 
     // MARK: - State
@@ -59,9 +64,9 @@ final class InputManager {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                let manager = Unmanaged<InputManager>
+                Unmanaged<InputManager>
                     .fromOpaque(refcon!).takeUnretainedValue()
-                return manager.handleEvent(proxy: proxy, type: type, event: event)
+                    .handleEvent(proxy: proxy, type: type, event: event)
             },
             userInfo: selfPtr
         ) else {
@@ -141,25 +146,37 @@ final class InputManager {
             }
         }
 
-        fireOnce(KC.space) { MouseController.click(button: .left) }
+        // Space：按住拖拽
+        if heldKeys.contains(KC.space) {
+            if !firedClickKeys.contains(KC.space) {
+                firedClickKeys.insert(KC.space)
+                MouseController.mouseDown(button: .left)
+            }
+        } else {
+            if firedClickKeys.contains(KC.space) {
+                firedClickKeys.remove(KC.space)
+                MouseController.mouseUp(button: .left)
+            }
+        }
+
+        fireOnce(KC.slash) { MouseController.doubleClick() }
         fireOnce(KC.n)     { MouseController.click(button: .right) }
         fireOnce(KC.m)     { MouseController.click(button: .center) }
-        fireOnce(KC.o)     { MouseController.keyPress(keyCode: 36) }
-        fireOnce(KC.h)     { MouseController.warpToCenter() }
+        fireOnce(KC.o) { MouseController.keyPress(keyCode: 36) }   // Return
+        fireOnce(KC.h) { MouseController.warpToCenter() }
 
-        // ── WASD：方向键 / 滚轮（Ctrl 切换语义）──
-        // 用系统级 flags 而非 heldKeys：左右 Control 都生效
-        let ctrlHeld = CGEventSource.flagsState(.hidSystemState)
-            .contains(.maskControl)
+        // ── WASD：方向键 / 滚轮（Shift 切换语义）──
+        let shiftHeld = CGEventSource.flagsState(.hidSystemState)
+            .contains(.maskShift)
 
-        if !ctrlHeld {
+        if !shiftHeld {
             // WASD → 方向键（边沿触发）
             fireOnce(KC.w) { MouseController.keyPress(keyCode: 126) } // ↑
             fireOnce(KC.a) { MouseController.keyPress(keyCode: 123) } // ←
             fireOnce(KC.s) { MouseController.keyPress(keyCode: 125) } // ↓
             fireOnce(KC.d) { MouseController.keyPress(keyCode: 124) } // →
         } else {
-            // Ctrl + W/S → 垂直滚轮，Ctrl + A/D → 水平滚轮（连续）
+            // Shift + W/S → 垂直滚轮，Shift + A/D → 水平滚轮（连续）
             let dt = 1.0 / 120.0
             var sx: Double = 0, sy: Double = 0
             if heldKeys.contains(KC.w) { sy -= Self.scrollSpeed * dt }
@@ -186,34 +203,37 @@ final class InputManager {
         case .keyDown:
             heldKeys.insert(keyCode)
 
-            // Esc+I 和弦 — 始终检测
+            // Esc+I — 始终生效：切换 待机 ↔ 光标
             if heldKeys.contains(KC.esc) && keyCode == KC.i {
-                if AppState.shared.mode == .normal {
-                    enterCursorMode()
-                } else {
-                    enterNormalMode()
-                }
+                AppState.shared.mode == .normal
+                    ? enterCursorMode()
+                    : enterNormalMode()
                 return nil
             }
 
-            // U：光标 → 输入（仅光标模式下）
-            if AppState.shared.mode == .cursor && keyCode == KC.u {
-                enterInputMode()
-                return nil
-            }
-
-            // Esc+U：输入 → 光标
+            // Esc+U — 输入 → 光标
             if heldKeys.contains(KC.esc) && keyCode == KC.u {
                 if AppState.shared.mode == .input { enterCursorMode() }
                 return nil
             }
 
-            // 光标模式 → 吞掉其余按键（移动/点击/滚动由 tick() 处理）
-            if AppState.shared.mode == .cursor {
+            // U — 光标 → 输入
+            if AppState.shared.mode == .cursor && keyCode == KC.u {
+                enterInputMode()
                 return nil
             }
 
-            // 输入模式 → 放行所有按键（Esc+I 已在上面处理）
+            // 光标模式：Cmd/Opt/Ctrl 修饰键 → 放行系统快捷键，其余消费
+            if AppState.shared.mode == .cursor {
+                let flags = CGEventSource.flagsState(.hidSystemState)
+                let isShortcut = flags.contains(.maskCommand)
+                    || flags.contains(.maskAlternate)
+                    || flags.contains(.maskControl)
+                if isShortcut { return Unmanaged.passUnretained(event) }
+                return nil
+            }
+
+            // 输入模式 → 全部放行
             if AppState.shared.mode == .input {
                 return Unmanaged.passUnretained(event)
             }
@@ -221,7 +241,6 @@ final class InputManager {
         case .keyUp:
             heldKeys.remove(keyCode)
 
-            // 输入模式 → 放行
             if AppState.shared.mode == .input {
                 return Unmanaged.passUnretained(event)
             }
@@ -233,9 +252,11 @@ final class InputManager {
         return Unmanaged.passUnretained(event)
     }
 
+    // MARK: - 模式切换
+
     private func enterCursorMode() {
         AppState.shared.mode = .cursor
-        heldKeys.removeAll()       // 清掉切换和弦的残留按键
+        heldKeys.removeAll()
         startUpdateLoop()
     }
 
@@ -250,7 +271,6 @@ final class InputManager {
         heldKeys.removeAll()
         stopUpdateLoop()
     }
-
 }
 
 // MARK: - Errors
