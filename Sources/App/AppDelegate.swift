@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -13,24 +14,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 状态
 
     private var statusItem: NSStatusItem!
-    private let inputManager = InputManager()
+    private let inputManager = InputManager.shared
     private var permissionPoller: Timer?
     private var monitorStarted = false
+    private var configWindow: NSWindow?
 
     // MARK: - 生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 单实例保护
+        // 单实例保护：若已有实例在运行，激活它并静默退出自己
         let running = NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.nuturn.dvp"
         )
-        if running.count > 1 {
-            let alert = NSAlert()
-            alert.messageText = "DvP 已在运行"
-            alert.informativeText = "DvP 作为菜单栏应用运行，菜单栏右上角可见。"
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "确定")
-            alert.runModal()
+        let others = running.filter {
+            $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        }
+        if let existing = others.first {
+            existing.activate(options: [.activateAllWindows])
             NSApp.terminate(nil)
             return
         }
@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         permissionPoller?.invalidate()
         inputManager.stop()
+        ConfigStore.shared.flush()
     }
 
     // MARK: - 权限与监听
@@ -169,6 +170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(
+            title: "配置…",
+            action: #selector(showConfigWindow),
+            keyEquivalent: ","
+        ))
+        menu.addItem(NSMenuItem(
             title: "重新检查权限",
             action: #selector(recheckPermission),
             keyEquivalent: ""
@@ -194,5 +200,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func recheckPermission() {
         monitorStarted = false
         attemptStart(requestPermissionIfNeeded: true)
+    }
+
+    // MARK: - 配置窗口
+
+    @objc private func showConfigWindow() {
+        if configWindow == nil {
+            let hosting = NSHostingController(rootView: ConfigWindow())
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "DvP 配置"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 1000, height: 700))
+            window.isReleasedWhenClosed = false
+            window.center()
+            configWindow = window
+
+            // 关闭窗口后回到菜单栏模式（去掉 Dock 图标）
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { _ in
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+
+        // 临时切到 regular 让配置窗口能正常接收键盘焦点（热键录制需要）
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        configWindow?.makeKeyAndOrderFront(nil)
     }
 }

@@ -104,12 +104,16 @@ enum MouseController {
 
     // MARK: - 按键
 
-    static func keyPress(keyCode: Int64) {
+    static func keyPress(keyCode: Int64, flags: CGEventFlags = []) {
         guard
             let down = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: true),
             let up   = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: false)
         else { return }
 
+        if !flags.isEmpty {
+            down.flags = flags
+            up.flags = flags
+        }
         down.post(tap: .cghidEventTap)
         usleep(5_000)
         up.post(tap: .cghidEventTap)
@@ -134,11 +138,15 @@ enum MouseController {
 
     /// 当前鼠标位置，Quartz 坐标系（左上角为原点）
     static var currentMousePosition: CGPoint {
-        let nsPoint = NSEvent.mouseLocation            // 左下角原点
-        let screenHeight = NSScreen.main?.frame.height ?? 900
+        let nsPoint = NSEvent.mouseLocation            // AppKit 全局坐标（主屏左下原点）
+        // 用主屏高度做全局 Y 翻转（Quartz 全局坐标：主屏左上原点、Y 向下）。
+        // 之前用 NSScreen.main 在多显示器/副屏场景下高度取错。
+        let primaryHeight = NSScreen.screens.first?.frame.height
+            ?? NSScreen.main?.frame.height
+            ?? 900
         return CGPoint(
             x: nsPoint.x,
-            y: screenHeight - nsPoint.y                // 翻转为左上角原点
+            y: primaryHeight - nsPoint.y
         )
     }
 

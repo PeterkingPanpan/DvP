@@ -1,51 +1,41 @@
 import CoreGraphics
 import Foundation
 import AppKit
+import Combine
 
-final class InputManager {
+final class InputManager: ObservableObject {
 
-    // MARK: - Key codes
+    static let shared = InputManager()
+
+    // MARK: - 系统保留键（模式切换），不参与重映射
 
     private enum KC {
-        // 方向键
-        static let i: Int64 = 34
-        static let j: Int64 = 38
-        static let k: Int64 = 40
-        static let l: Int64 = 37
-        // 功能键
         static let esc: Int64 = 53
-        static let semicolon: Int64 = 41
-        static let space: Int64 = 49
         static let u: Int64 = 32
-        // 点击
-        static let slash: Int64 = 44  // / — 左键单击/双击
-        static let n: Int64 = 45
-        static let m: Int64 = 46
-        // 回车发射
-        static let o: Int64 = 31
-        // 瞬移
-        static let h: Int64 = 4
-        // WASD
-        static let w: Int64 = 13
-        static let a: Int64 = 0
-        static let s: Int64 = 1
-        static let d: Int64 = 2
+        static let i: Int64 = 34
     }
+
+    /// 加速键（按住翻倍），v1 固定为分号
+    static let speedKeyCode: Int64 = 41
 
     /// 滚轮速度（像素/秒）
     private static let scrollSpeed: Double = 480
 
-    // MARK: - State
+    // MARK: - 状态
+
+    /// 当前按住的键（供键盘可视化实时高亮）
+    @Published private(set) var heldKeys = Set<Int64>()
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var heldKeys = Set<Int64>()
-    private var firedClickKeys = Set<Int64>()
+    private var firedKeys = Set<Int64>()
     private var isRunning = false
     private var updateTimer: Timer?
     private var cursorEngine = CursorEngine()
 
-    // MARK: - Lifecycle
+    private init() {}
+
+    // MARK: - 生命周期
 
     func start() throws {
         guard PermissionManager.isTrusted else { throw WasdError.noPermission }
@@ -96,7 +86,7 @@ final class InputManager {
     private func startUpdateLoop() {
         stopUpdateLoop()
         cursorEngine.reset()
-        firedClickKeys.removeAll()
+        firedKeys.removeAll()
         updateTimer = Timer.scheduledTimer(
             withTimeInterval: 1.0 / 120.0,
             repeats: true
@@ -110,13 +100,22 @@ final class InputManager {
         updateTimer = nil
     }
 
+    // MARK: - 每帧逻辑
+
     private func tick() {
+        let dt = 1.0 / 120.0
+        let map = ConfigStore.shared.keyMap
+
         // ── 光标移动 ──
-        let speedHeld = heldKeys.contains(KC.semicolon)
+        syncEngineParams()
+        let speedHeld = heldKeys.contains(Self.speedKeyCode)
         let (dx, dy) = cursorEngine.update(
-            heldKeys: heldKeys,
+            moveUp: directionHeld(.up, map),
+            moveDown: directionHeld(.down, map),
+            moveLeft: directionHeld(.left, map),
+            moveRight: directionHeld(.right, map),
             speedKeyHeld: speedHeld,
-            deltaTime: 1.0 / 120.0
+            deltaTime: dt
         )
         if dx != 0 || dy != 0 {
             MouseController.move(dx: dx, dy: dy)
@@ -134,62 +133,108 @@ final class InputManager {
             )
         }
 
-        // ── 点击键（边沿触发：按下瞬间发射一次，松手重置）──
-        func fireOnce(_ key: Int64, _ action: () -> Void) {
-            if heldKeys.contains(key) {
-                if !firedClickKeys.contains(key) {
-                    firedClickKeys.insert(key)
-                    action()
+        // ── 拖拽（按住 = mouseDown，松开 = mouseUp）──
+        handleDrag(map)
+
+        // ── 边沿触发动作 ──
+        let shiftHeld = CGEventSource.flagsState(.hidSystemState).contains(.maskShift)
+        for keyCode in heldKeys {
+            guard let action = map[keyCode] else { continue }
+            switch action {
+            case .move, .drag, .scroll, .unbound:
+                break  // move 由引擎处理；drag/scroll 单独处理
+            case .click(let type):
+                fireOnce(keyCode) { Self.performClick(type) }
+            case .enter:
+                fireOnce(keyCode) { MouseController.keyPress(keyCode: 36) }  // Return
+            case .warpCenter:
+                fireOnce(keyCode) { MouseController.warpToCenter() }
+            case .arrowKey(let dir):
+                if !shiftHeld {
+                    fireOnce(keyCode) { MouseController.keyPress(keyCode: dir.arrowKeyCode) }
                 }
-            } else {
-                firedClickKeys.remove(key)
+                // Shift + 方向键 → 由下面的滚动段处理
+            case .hotkey(let kc, let fl):
+                fireOnce(keyCode) { MouseController.keyPress(keyCode: kc, flags: CGEventFlags(rawValue: fl)) }
             }
         }
 
-        // Space：按住拖拽
-        if heldKeys.contains(KC.space) {
-            if !firedClickKeys.contains(KC.space) {
-                firedClickKeys.insert(KC.space)
-                MouseController.mouseDown(button: .left)
+        // ── 滚动（持续；Shift + 方向键也在此处理）──
+        var sx: Double = 0, sy: Double = 0
+        for keyCode in heldKeys {
+            guard let action = map[keyCode] else { continue }
+            let dir: Direction?
+            switch action {
+            case .scroll(let d): dir = d
+            case .arrowKey(let d): dir = shiftHeld ? d : nil
+            default: dir = nil
             }
-        } else {
-            if firedClickKeys.contains(KC.space) {
-                firedClickKeys.remove(KC.space)
-                MouseController.mouseUp(button: .left)
+            guard let d = dir else { continue }
+            switch d {
+            case .up: sy -= Self.scrollSpeed * dt
+            case .down: sy += Self.scrollSpeed * dt
+            case .left: sx -= Self.scrollSpeed * dt
+            case .right: sx += Self.scrollSpeed * dt
             }
         }
+        if sx != 0 || sy != 0 {
+            MouseController.scroll(dx: Int32(sx), dy: Int32(sy))
+        }
 
-        fireOnce(KC.slash) { MouseController.doubleClick() }
-        fireOnce(KC.n)     { MouseController.click(button: .right) }
-        fireOnce(KC.m)     { MouseController.click(button: .center) }
-        fireOnce(KC.o) { MouseController.keyPress(keyCode: 36) }   // Return
-        fireOnce(KC.h) { MouseController.warpToCenter() }
-
-        // ── WASD：方向键 / 滚轮（Shift 切换语义）──
-        let shiftHeld = CGEventSource.flagsState(.hidSystemState)
-            .contains(.maskShift)
-
-        if !shiftHeld {
-            // WASD → 方向键（边沿触发）
-            fireOnce(KC.w) { MouseController.keyPress(keyCode: 126) } // ↑
-            fireOnce(KC.a) { MouseController.keyPress(keyCode: 123) } // ←
-            fireOnce(KC.s) { MouseController.keyPress(keyCode: 125) } // ↓
-            fireOnce(KC.d) { MouseController.keyPress(keyCode: 124) } // →
-        } else {
-            // Shift + W/S → 垂直滚轮，Shift + A/D → 水平滚轮（连续）
-            let dt = 1.0 / 120.0
-            var sx: Double = 0, sy: Double = 0
-            if heldKeys.contains(KC.w) { sy -= Self.scrollSpeed * dt }
-            if heldKeys.contains(KC.s) { sy += Self.scrollSpeed * dt }
-            if heldKeys.contains(KC.a) { sx -= Self.scrollSpeed * dt }
-            if heldKeys.contains(KC.d) { sx += Self.scrollSpeed * dt }
-            if sx != 0 || sy != 0 {
-                MouseController.scroll(dx: Int32(sx), dy: Int32(sy))
-            }
+        // ── 清理：松开后允许下次再触发 ──
+        for key in firedKeys where !heldKeys.contains(key) {
+            firedKeys.remove(key)
         }
     }
 
-    // MARK: - Event processing
+    // MARK: - 动作分派辅助
+
+    private func syncEngineParams() {
+        let s = ConfigStore.shared.speed
+        cursorEngine.baseSpeed = s.baseSpeed
+        cursorEngine.shiftMultiplier = s.shiftMultiplier
+        cursorEngine.maxSpeed = s.maxSpeed
+        cursorEngine.smoothing = s.smoothing
+        cursorEngine.sigmoidMidpoint = s.sigmoidMidpoint
+        cursorEngine.sigmoidSteepness = s.sigmoidSteepness
+        cursorEngine.accelerationCap = s.accelerationCap
+        cursorEngine.negativeInertia = s.negativeInertia
+    }
+
+    private func directionHeld(_ dir: Direction, _ map: [Int64: KeyAction]) -> Bool {
+        heldKeys.contains { map[$0] == .move(dir) }
+    }
+
+    private func handleDrag(_ map: [Int64: KeyAction]) {
+        if let key = heldKeys.first(where: { map[$0] == .drag }) {
+            if !firedKeys.contains(key) {
+                firedKeys.insert(key)
+                MouseController.mouseDown(button: .left)
+            }
+        }
+        if let released = firedKeys.first(where: { !heldKeys.contains($0) && map[$0] == .drag }) {
+            firedKeys.remove(released)
+            MouseController.mouseUp(button: .left)
+        }
+    }
+
+    private func fireOnce(_ key: Int64, _ action: () -> Void) {
+        if !firedKeys.contains(key) {
+            firedKeys.insert(key)
+            action()
+        }
+    }
+
+    private static func performClick(_ type: ClickType) {
+        switch type {
+        case .leftClick: MouseController.click(button: .left)
+        case .leftDouble: MouseController.doubleClick()
+        case .rightClick: MouseController.click(button: .right)
+        case .middleClick: MouseController.click(button: .center)
+        }
+    }
+
+    // MARK: - 事件处理
 
     private func handleEvent(
         proxy: CGEventTapProxy,

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// 系统模式
 enum SystemMode {
@@ -8,10 +9,10 @@ enum SystemMode {
 }
 
 /// 线程安全的状态持有者
-final class AppState {
+final class AppState: ObservableObject {
     static let shared = AppState()
 
-    var mode: SystemMode = .normal {
+    @Published var mode: SystemMode = .normal {
         didSet { onModeChange?(mode) }
     }
 
